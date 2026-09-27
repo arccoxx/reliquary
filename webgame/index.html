@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#1a1714">
+  <title>Reliquary INSERT</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./icon.svg">
+  <style>
+    :root { --ink:#1a1714; --paper:#f6f1e7; --line:#c9bba6; --ok:#2c5f2d; --bad:#8b2e2e; --mute:#6e6558; }
+    * { box-sizing: border-box; }
+    body { margin:0; font: 17px/1.45 Georgia, serif; background:var(--paper); color:var(--ink); }
+    main { max-width: 42rem; margin: 0 auto; padding: 1.25rem 1rem 5rem; }
+    h1 { font-size: 1.05rem; margin: 0 0 .2rem; }
+    .sub { color: var(--mute); font-size: .86rem; }
+    .card { border: 1px solid var(--line); padding: 1rem; background: #fffdf8; }
+    .gap { border-bottom: 2px solid var(--ink); }
+    button { font: inherit; cursor: pointer; background: #fff; border: 1px solid var(--ink); padding: .5rem .7rem; margin: 0 .3rem .4rem 0; }
+    button.picked { background: var(--ink); color: var(--paper); }
+    .ok { color: var(--ok); } .bad { color: var(--bad); }
+    .bar,.axes { display:flex; justify-content:space-between; gap:.5rem; font-size:.8rem; color:var(--mute); flex-wrap:wrap; margin-bottom:.7rem; }
+    .axes span { border: 1px solid var(--line); padding: .1rem .35rem; }
+    .axes .hot { border-color: var(--ink); color: var(--ink); }
+    #err { display:none; background:#f4e4e0; color:var(--bad); padding:.6rem; margin-bottom:1rem; }
+  </style>
+</head>
+<body>
+<main>
+  <div id="err"></div>
+  <h1>Reliquary INSERT</h1>
+  <p class="sub">Real objects: computer, bank, stone. Two live Terms, then which continuation closes.</p>
+  <div class="bar"><span id="score">0 / 0</span><span id="qflow">Q_flow</span><span id="mode"></span></div>
+  <div class="axes" id="axes">
+    <span data-ax="P">P retro</span><span data-ax="t" class="hot">t now</span><span data-ax="F">F pro</span><span data-ax="U">U+ higher</span><span data-ax="D">D- lower</span>
+  </div>
+  <div class="card">
+    <p class="stem" id="stem" style="font-size:1.2rem"></p>
+    <div id="choices"></div>
+    <p class="sub" id="hint"></p>
+    <p id="verdict"></p>
+    <button type="button" id="next" hidden>next beat</button>
+  </div>
+  <p class="sub" id="model"></p>
+  <button type="button" id="export">export log</button>
+  <button type="button" id="reset">reset model</button>
+</main>
+<script>
+(function(){
+"use strict";
+var KEY="reliquary.learner.v1";
+var ITEMS=[
+{word:"computer",stem:"A ___ is a machine or a person who computes.",senses:[{id:"c-machine",label:"machine that computes",sort:"Kind"},{id:"c-person",label:"person who computes",sort:"Entity"},{id:"c-decoy",label:"a river-bank",sort:"Entity"}],live:["c-machine","c-person"],continuations:[{text:"…and it runs a program.",closes:"c-machine"},{text:"…and she added the column by hand in 1910.",closes:"c-person"}]},
+{word:"bank",stem:"They walked along the ___.",senses:[{id:"b-river",label:"sloping land by a river",sort:"Entity"},{id:"b-fin",label:"financial institution",sort:"Kind"},{id:"b-decoy",label:"a person who computes",sort:"Entity"}],live:["b-river","b-fin"],continuations:[{text:"…where the current cut the soil away.",closes:"b-river"},{text:"…and deposited the month's receipts.",closes:"b-fin"}]},
+{word:"stone",stem:"A rolling ___ gathers no moss.",senses:[{id:"s-rock",label:"rock, mineral mass",sort:"Entity"},{id:"s-wander",label:"wanderer who does not settle",sort:"Entity"},{id:"s-decoy",label:"financial institution",sort:"Kind"}],live:["s-rock","s-wander"],continuations:[{text:"Literal close: moss as plant.",closes:"s-rock"},{text:"Figurative close: moss as attachments.",closes:"s-wander"}]}
+];
+function empty(){return {terms:{},words:{},log:[],ok:0,n:0};}
+function load(){try{var raw=localStorage.getItem(KEY);if(!raw)return empty();var m=JSON.parse(raw);if(!m||typeof m!=="object")throw new Error("shape");m.terms=m.terms||{};m.words=m.words||{};m.log=Array.isArray(m.log)?m.log.slice(-200):[];m.ok=+m.ok||0;m.n=+m.n||0;return m;}catch(e){try{localStorage.setItem(KEY+".broken",String(localStorage.getItem(KEY)||"").slice(0,4000));}catch(_){}err("Learner JSON corrupt. Salvaged. Play continues.");return empty();}}
+function save(m){try{localStorage.setItem(KEY,JSON.stringify(m));}catch(e){err("Could not save. Export now.");}}
+function err(msg){var el=document.getElementById("err");el.style.display="block";el.textContent=msg;}
+function strength(t){var rec=model.terms[t]||{ok:0,bad:0};var tot=rec.ok+rec.bad;return tot?rec.ok/tot:0.5;}
+function bump(id,good){var rec=model.terms[id]||{ok:0,bad:0,last:0};if(good)rec.ok++;else rec.bad++;rec.last=Date.now();model.terms[id]=rec;}
+function pickIndex(prev,fail){if(fail&&prev){for(var k=0;k<ITEMS.length;k++)if(ITEMS[k].word===prev)return k;}var best=0,score=-1;ITEMS.forEach(function(it,idx){var weak=it.live.reduce(function(s,id){return s+(1-strength(id));},0);var sc=weak+(it.word===prev?0.15:0);if(sc>score){score=sc;best=idx;}});return best;}
+function $(id){return document.getElementById(id);}
+var model=load(),i=0,picked=[],phase="pick",cont=null,xorFail=false,prevWord=null;
+function setAxis(ax){document.querySelectorAll("#axes span").forEach(function(n){n.classList.toggle("hot",n.getAttribute("data-ax")===ax);});}
+function render(){try{var item=ITEMS[i];$("stem").innerHTML=item.stem.replace("___",'<span class="gap">'+item.word+"</span>");$("choices").innerHTML="";$("verdict").textContent="";$("next").hidden=true;$("score").textContent=model.ok+" / "+model.n;$("qflow").textContent="Q_flow "+(model.n?(model.ok/model.n).toFixed(2):"—");$("model").textContent="warm: "+item.live.map(function(id){return id+"="+strength(id).toFixed(2);}).join(" · ");if(phase==="pick"){setAxis("t");$("mode").textContent="pick TWO live senses of "+item.word;$("hint").textContent="Decoy is not a Term of this Word.";item.senses.forEach(function(s){var b=document.createElement("button");b.type="button";b.textContent=s.label+" ("+s.sort+")";b.onclick=function(){toggle(s.id,b);};$("choices").appendChild(b);});}else{setAxis("F");$("mode").textContent="which continuation closes?";$("stem").innerHTML+=" <em>"+cont.text+"</em>";picked.filter(function(id){return item.live.indexOf(id)!==-1;}).forEach(function(id){var s=item.senses.filter(function(x){return x.id===id;})[0];var b=document.createElement("button");b.type="button";b.textContent="closes: "+s.label;b.onclick=function(){judge(item,id);};$("choices").appendChild(b);});}}catch(e){err("Render fault. Next beat still works.");}}
+function toggle(id,btn){if(picked.indexOf(id)!==-1){picked=picked.filter(function(x){return x!==id;});btn.classList.remove("picked");}else{picked.push(id);btn.classList.add("picked");}var item=ITEMS[i];if(item.live.every(function(x){return picked.indexOf(x)!==-1;})&&picked.length===item.live.length){cont=item.continuations[Math.floor(Math.random()*item.continuations.length)];phase="close";render();}}
+function judge(item,id){var good=id===cont.closes;model.n++;if(good)model.ok++;bump(id,good);item.live.forEach(function(lid){if(lid!==id)bump(lid,good);});xorFail=!good;prevWord=item.word;model.words[item.word]={lastOk:good,t:Date.now()};model.log.push({t:Date.now(),word:item.word,pick:id,closes:cont.closes,good:good});if(model.log.length>200)model.log=model.log.slice(-200);save(model);$("verdict").className=good?"ok":"bad";$("verdict").textContent=good?"Legal close. Other Term remains a branch.":"XOR residue. Stay on this Word.";$("next").hidden=false;$("choices").querySelectorAll("button").forEach(function(b){b.disabled=true;});}
+$("next").onclick=function(){picked=[];phase="pick";cont=null;i=pickIndex(prevWord,xorFail);render();};
+$("export").onclick=function(){var a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(model,null,2)],{type:"application/json"}));a.download="reliquary-learner.json";a.click();};
+$("reset").onclick=function(){if(!confirm("Clear on-device learner?"))return;model=empty();save(model);xorFail=false;prevWord=null;i=0;picked=[];phase="pick";render();};
+if("serviceWorker"in navigator&&location.protocol!=="file:")navigator.serviceWorker.register("./sw.js").catch(function(){});
+render();
+})();
+</script>
+</body>
+</html>
